@@ -1,0 +1,12 @@
+name = "yero-mobile-studio"
+compatibility_date = "2026-10-29"
+pages_build_output_dir = "../dist/site"
+
+# Replace the placeholder in a local, untracked wrangler.toml.
+[[kv_namespaces]]
+binding = "YERO_QUEUE"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[[env.production.kv_namespaces]]
+binding = "YERO_QUEUE"
+id = "YOUR_KV_NAMESPACE_ID"

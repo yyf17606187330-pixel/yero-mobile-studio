@@ -1,0 +1,20 @@
+{
+  "name": "yero-mobile-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node check.mjs && node test_session_isolation.mjs && node test_live_ui.mjs && node test_chat_storage.mjs && node --test test_worker.mjs"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "fake-indexeddb": "6.2.6",
+    "jsdom": "26.1.0"
+  }
+}

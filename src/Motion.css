@@ -1,0 +1,50 @@
+/* Short, interaction-driven motion; no animation dependencies or background loops. */
+.mobile-studio{--motion-ease:cubic-bezier(.22,1,.36,1)}
+.mobile-studio button:active{filter:none}
+.mobile-studio :is(.round-button,.attach-button,.send-button,.drawer-compose,.setting-chip,.sheet-done,.drawer-new,.mobile-template),
+.mobile-studio :is(.quick-prompts,.view-switch,.category-scroll,.history-tabs,.ratio-grid,.style-grid,.template-token,.reference-token) button{transition:transform 120ms var(--motion-ease)}
+.mobile-studio :is(.round-button,.attach-button,.send-button,.drawer-compose,.setting-chip,.sheet-done,.drawer-new):active,
+.mobile-studio :is(.quick-prompts,.view-switch,.category-scroll,.history-tabs,.ratio-grid,.style-grid,.template-token,.reference-token) button:active{transform:scale(.96)}
+.mobile-studio .mobile-template:active{transform:scale(.98)}
+.mobile-studio .mobile-template:active .template-art{transform:none}
+
+.mobile-studio .view-switch{position:relative;isolation:isolate;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.view-switch::before{content:"";position:absolute;z-index:-1;top:4px;bottom:4px;left:4px;width:calc((100% - 11px)/2);border-radius:24px;background:var(--soft);pointer-events:none;transition:transform 180ms var(--motion-ease)}
+.view-switch[data-view="templates"]::before{transform:translateX(calc(100% + 3px))}
+.mobile-studio .view-switch button.active{background:transparent}
+
+.mobile-studio .history-drawer{animation:studio-drawer-in 330ms cubic-bezier(.2,.75,.25,1)}
+.mobile-studio .settings-sheet{animation:studio-sheet-in 220ms var(--motion-ease)}
+.overlay-upload{align-items:flex-end}
+.template-upload-note{display:flex;align-items:center;gap:7px;margin:-1px 1px 10px;font-size:12px;color:var(--muted);line-height:1.7}
+.template-upload-note svg{flex-shrink:0}
+.template-requirement{position:absolute;top:11px;left:11px;display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:14px;background:rgba(255,255,255,.94);color:#25324a;font-size:10px;line-height:1.4}
+.template-token small{font-size:10px;color:var(--accent);padding:2px 5px;background:var(--accent-soft);border-radius:5px}
+.upload-template-summary{display:flex;align-items:center;gap:14px;padding:14px 0 12px}
+.upload-template-thumb{display:block;width:58px;height:68px;flex-shrink:0;border-radius:12px;overflow:hidden}
+.upload-template-summary p{font-size:14px;line-height:1.8}
+.upload-template-summary span:not(.upload-template-thumb){display:block;color:var(--muted);font-size:12px;margin-top:3px}
+.upload-formats{color:var(--muted);font-size:12px;line-height:1.8;margin:4px 0 18px}
+.upload-primary{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px}
+.upload-sheet .mobile-error{margin:0 0 9px}
+.mobile-studio .overlay-backdrop{animation:studio-fade-in 180ms ease-out}
+.mobile-studio .is-closing .history-drawer{animation:studio-drawer-out 240ms ease-in both;pointer-events:none}
+.mobile-studio .is-closing .settings-sheet{animation:studio-sheet-out 180ms ease-in both;pointer-events:none}
+.mobile-studio .is-closing .overlay-backdrop{animation:studio-fade-out 180ms ease-in both}
+.mobile-template-grid,.mobile-start,.mobile-conversation{animation:studio-fade-in 180ms ease-out}
+.template-token,.reference-token{animation:studio-token-in 160ms var(--motion-ease)}
+.style-grid .active svg{animation:studio-token-in 140ms var(--motion-ease)}
+.mobile-error{animation:studio-fade-in 120ms ease-out}
+
+@keyframes studio-drawer-in{from{transform:translateX(-100%)}to{transform:translateX(0)}}
+@keyframes studio-drawer-out{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+@keyframes studio-sheet-in{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes studio-sheet-out{from{transform:translateY(0)}to{transform:translateY(100%)}}
+@keyframes studio-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes studio-fade-out{from{opacity:1}to{opacity:0}}
+@keyframes studio-token-in{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+
+@media(prefers-reduced-motion:reduce){
+ .mobile-studio *, .mobile-studio *::before, .mobile-studio *::after{animation:none!important;transition:none!important}
+ .mobile-studio button:active{transform:none!important}
+}

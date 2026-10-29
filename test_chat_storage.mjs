@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {existsSync} from 'node:fs';
+import fs from 'node:fs/promises';
+import {build} from 'esbuild';
+import 'fake-indexeddb/auto';
+
+const dir=path.dirname(fileURLToPath(import.meta.url));
+const source=path.join(dir,'src/chatStorage.ts');
+assert(existsSync(source),'Persistent chat storage has not been implemented');
+const qa=path.join(dir,'.test-cache');await fs.mkdir(qa,{recursive:true});
+const outfile=path.join(qa,'chat-storage-test.mjs');
+await build({entryPoints:[source],outfile,bundle:true,format:'esm',platform:'node'});
+const {saveChatMessage,loadChatIndex,loadMessageMedia,setMessageFavorite}=await import('./.test-cache/chat-storage-test.mjs');
+const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=';
+const chat={id:'chat-one',title:'紫色小鸟',createdAt:1,updatedAt:2};
+const message={id:'message-one',chatId:chat.id,brief:{prompt:'紫色小鸟',ratio:'1:1',style:'自动',resolution:'2K',reference:image},image,favorite:false,status:'completed',createdAt:2};
+await saveChatMessage(chat,message);
+await saveChatMessage({...chat,updatedAt:3},{...message,id:'message-two',brief:{...message.brief,prompt:'再画一只'},createdAt:3});
+let saved=await loadChatIndex();
+assert.equal(saved.chats.length,1);assert.equal(saved.messages.length,2);assert.equal(saved.messages[0].brief.prompt,'紫色小鸟');
+assert.equal(saved.messages[0].image,null,'Large images are loaded only when a conversation is opened');
+assert.equal(JSON.stringify(saved).includes('base64,'),false,'The initial chat index does not contain image bytes');
+const media=await loadMessageMedia('message-one');assert.equal(media.image,image);assert.equal(media.reference,image);
+await setMessageFavorite('message-one',true);saved=await loadChatIndex();assert.equal(saved.messages.find(x=>x.id==='message-one').favorite,true);
+assert.equal(saved.messages.find(x=>x.id==='message-two').favorite,false,'Updating one message keeps the other intact');
+console.log('PASS: chat records and images survive reopening, media loads on demand, favorites persist');

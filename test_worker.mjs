@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import worker from './cloud/worker.mjs';
+
+class MemoryKV {
+ values=new Map();
+ async put(key,value){this.values.set(key,typeof value==='string'?new TextEncoder().encode(value):new Uint8Array(value));}
+ async get(key,options){const value=this.values.get(key);if(!value)return null;return options?.type==='arrayBuffer'?value.slice().buffer:new TextDecoder().decode(value);}
+ async list({prefix}){return {keys:[...this.values.keys()].filter(key=>key.startsWith(prefix)).map(name=>({name})),list_complete:true};}
+}
+const request=(path,options={})=>new Request('https://yero.example'+path,options);
+const key='01'.repeat(32);
+const makeEnv=()=>({YERO_ACCESS_CODE:'human-secret',YERO_RUNNER_KEY:'runner-secret',YERO_STORAGE_KEY:key,YERO_QUEUE:new MemoryKV(),ASSETS:{fetch:async()=>new Response('site content')}});
+const human={Authorization:'Bearer human-secret','Content-Type':'application/json'};
+const runner={'X-Yero-Runner':'runner-secret'};
+async function encrypt(text){const iv=new Uint8Array(12).fill(7);const raw=Uint8Array.from(key.match(/../g),h=>parseInt(h,16));const cryptoKey=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt']);const cipher=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},cryptoKey,new TextEncoder().encode(text)));const result=new Uint8Array(iv.length+cipher.length);result.set(iv);result.set(cipher,iv.length);return result;}
+async function decrypt(bytes){const data=new Uint8Array(bytes);const raw=Uint8Array.from(key.match(/../g),h=>parseInt(h,16));const cryptoKey=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['decrypt']);return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:data.slice(0,12)},cryptoKey,data.slice(12)));}
+
+test('static content remains public',async()=>{const response=await worker.fetch(request('/'),makeEnv());assert.equal(await response.text(),'site content');});
+test('unauthorized clients cannot create jobs or access the runner',async()=>{
+ const env=makeEnv();assert.equal((await worker.fetch(request('/api/jobs',{method:'POST',body:'{}'}),env)).status,401);
+ assert.equal((await worker.fetch(request('/api/runner/next'),env)).status,401);assert.equal(env.YERO_QUEUE.values.size,0);
+});
+test('image job travels through the encrypted queue and returns its result',async()=>{
+ const env=makeEnv();const prompt='a private reference description';
+ const submitted=await worker.fetch(request('/api/jobs',{method:'POST',headers:human,body:JSON.stringify({prompt,ratio:'1:1',style:'自动',reference:null})}),env);
+ assert.equal(submitted.status,202);const {id}=await submitted.json();assert.match(id,/^[a-f0-9]{32}$/);
+ const stored=env.YERO_QUEUE.values.get('q/'+id);assert(stored);assert(!new TextDecoder().decode(stored).includes(prompt),'Queue data is encrypted');
+ const pending=await worker.fetch(request('/api/jobs/'+id,{headers:human}),env);assert.equal((await pending.json()).status,'running');
+ const next=await worker.fetch(request('/api/runner/next?force=1',{headers:runner}),env);assert.equal(next.status,200);assert.equal(next.headers.get('X-Yero-Job'),id);
+ assert.equal(JSON.parse(await decrypt(await next.arrayBuffer())).prompt,prompt);
+ const encryptedResult=await encrypt(JSON.stringify({status:'completed',image:'data:image/png;base64,AAAA'}));
+ const done=await worker.fetch(request('/api/runner/result/'+id,{method:'POST',headers:runner,body:encryptedResult}),env);assert.equal(done.status,200);
+ const result=await worker.fetch(request('/api/jobs/'+id,{headers:human}),env);assert.deepEqual(await result.json(),{status:'completed',image:'data:image/png;base64,AAAA'});
+});
+test('missing storage configuration fails closed and other APIs stay unavailable',async()=>{
+ const env=makeEnv();delete env.YERO_STORAGE_KEY;
+ assert.equal((await worker.fetch(request('/api/jobs',{method:'POST',headers:human,body:'{}'}),env)).status,503);
+ assert.equal((await worker.fetch(request('/api/models',{headers:human}),env)).status,404);
+});
