@@ -14,6 +14,7 @@
 !test_live_ui.mjs
 !test_session_isolation.mjs
 !test_voice_ui.mjs
+!test_pixel_wave.mjs
 !test_worker.mjs
 !test_yero_relay.py
 !test_yero_runner.py
