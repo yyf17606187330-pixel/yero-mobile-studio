@@ -111,6 +111,23 @@ class RelayIntegration(unittest.TestCase):
         self.assertEqual(self.request('/jobs', {'prompt': '   '})[0], 400)
         self.assertEqual(self.request('/jobs', {'prompt': 'A blue bird', 'reference': 'data:image/png;base64,not-valid!'})[0], 400)
 
+    def test_mask_is_validated_and_forwarded_as_multipart(self):
+        import yero_relay
+        mask = io.BytesIO()
+        Image.new('RGBA', (1, 1), (255, 255, 255, 0)).save(mask, format='PNG')
+        encoded = 'data:image/png;base64,' + base64.b64encode(mask.getvalue()).decode('ascii')
+        job = yero_relay.validate_job({'prompt': 'Change this area', 'reference': DATA_URL, 'mask': encoded})
+        request = yero_relay.build_request(job, 'http://127.0.0.1', 'test-key')
+        self.assertIn(b'name="mask"', request.data)
+        self.assertIn(mask.getvalue(), request.data)
+        with self.assertRaises(yero_relay.InputError):
+            yero_relay.validate_job({'prompt': 'Change this area', 'mask': encoded})
+        other = io.BytesIO()
+        Image.new('RGBA', (2, 1), (255, 255, 255, 0)).save(other, format='PNG')
+        invalid = 'data:image/png;base64,' + base64.b64encode(other.getvalue()).decode('ascii')
+        with self.assertRaises(yero_relay.InputError):
+            yero_relay.validate_job({'prompt': 'Change this area', 'reference': DATA_URL, 'mask': invalid})
+
     def test_text_generation_returns_the_generated_image(self):
         status, body = self.request('/jobs', {'prompt': 'A blue bird', 'ratio': '1:1', 'style': '自动'})
         self.assertEqual(status, 202)

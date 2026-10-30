@@ -62,7 +62,22 @@ def validate_job(payload):
                       'image/webp': image.startswith(b'RIFF') and image[8:12] == b'WEBP'}
         if not signatures[mime]:
             raise InputError('参考图格式不正确。')
-    return {'prompt': prompt.strip(), 'ratio': ratio, 'style': style, 'resolution': resolution, 'image': image, 'mime': mime}
+    mask = payload.get('mask')
+    mask_data = None
+    if mask is not None:
+        if image is None or not isinstance(mask, str) or len(mask) > 4 * 1024 * 1024:
+            raise InputError('局部修改选区无效。')
+        match = re.fullmatch(r'data:image/png;base64,([A-Za-z0-9+/=]+)', mask)
+        try:
+            mask_data = base64.b64decode(match.group(1), validate=True) if match else None
+            if not mask_data or not mask_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise ValueError('Invalid mask')
+            with Image.open(io.BytesIO(image)) as target, Image.open(io.BytesIO(mask_data)) as selection:
+                if target.size != selection.size or 'A' not in selection.getbands():
+                    raise ValueError('Invalid mask size or alpha')
+        except (ValueError, OSError, binascii.Error) as exc:
+            raise InputError('局部修改选区无效。') from exc
+    return {'prompt': prompt.strip(), 'ratio': ratio, 'style': style, 'resolution': resolution, 'image': image, 'mime': mime, 'mask': mask_data}
 
 
 def build_request(job, bridge_url, bridge_key):
@@ -82,7 +97,11 @@ def build_request(job, bridge_url, bridge_key):
                           '"\r\n\r\n' + value + '\r\n').encode('utf-8'))
         parts.append(('--' + boundary + '\r\nContent-Disposition: form-data; name="image"; '
                       'filename="reference"\r\nContent-Type: ' + job['mime'] + '\r\n\r\n').encode('ascii'))
-        parts.extend((job['image'], b'\r\n', ('--' + boundary + '--\r\n').encode('ascii')))
+        parts.extend((job['image'], b'\r\n'))
+        if job.get('mask'):
+            parts.append(('--' + boundary + '\r\nContent-Disposition: form-data; name="mask"; filename="mask.png"\r\nContent-Type: image/png\r\n\r\n').encode('ascii'))
+            parts.extend((job['mask'], b'\r\n'))
+        parts.append(('--' + boundary + '--\r\n').encode('ascii'))
         data = b''.join(parts)
         headers['Content-Type'] = 'multipart/form-data; boundary=' + boundary
         endpoint = '/v1/images/edits'
@@ -100,7 +119,7 @@ def perform_job(job, bridge_url, bridge_key, bridge_state_dir=None):
         raw = base64.b64decode(image, validate=True)
         if not raw.startswith(b'\x89PNG\r\n\x1a\n'):
             raise ValueError('Invalid generated image')
-        if job['image'] is not None and bridge_state_dir is not None:
+        if job['image'] is not None and bridge_state_dir is not None and not job.get('mask'):
             job_id = payload.get('bridge', {}).get('job_id', '')
             if not re.fullmatch(r'[0-9a-f]{32}', job_id):
                 raise ValueError('Native image identifier is unavailable')

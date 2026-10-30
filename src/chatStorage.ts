@@ -1,4 +1,4 @@
-export type Brief={prompt:string;ratio:string;style:string;resolution:string;reference:string|null};
+export type Brief={prompt:string;ratio:string;style:string;resolution:string;reference:string|null;mask?:string|null};
 export type Creation={id:string;chatId:string;brief:Brief;image:string|null;favorite:boolean;status:'pending'|'completed'|'failed';createdAt:number;error?:string;remoteId?:string;hasImage?:boolean;hasReference?:boolean};
 export type Conversation={id:string;title:string;createdAt:number;updatedAt:number};
 

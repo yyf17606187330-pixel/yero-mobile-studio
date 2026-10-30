@@ -21,8 +21,8 @@ const ratios=['1:1','3:4','4:3','16:9','9:16'];
 const resolutions=['原图','1K','2K','4K'];
 type Overlay='history'|'settings'|'upload'|'access'|null;
 const newId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
-type ChatDraft={prompt:string;ratio:string;style:string;resolution:string;selected:string|null;reference:{name:string;url:string}|null;error:string};
-const emptyDraft=():ChatDraft=>({prompt:'',ratio:'1:1',style:'自动',resolution:'1K',selected:null,reference:null,error:''});
+type ChatDraft={prompt:string;ratio:string;style:string;resolution:string;selected:string|null;reference:{name:string;url:string}|null;mask:string|null;error:string};
+const emptyDraft=():ChatDraft=>({prompt:'',ratio:'1:1',style:'自动',resolution:'1K',selected:null,reference:null,mask:null,error:''});
 type VoiceStage='starting'|'recording'|'transcribing';
 type VoiceRecording={chatId:string;code:string;recorder:MediaRecorder;stream:MediaStream;chunks:Blob[];timer:number;bytes:number;cancelled:boolean;released:boolean;tooLarge:boolean};
 
@@ -62,7 +62,8 @@ export function MobileStudio(){
  const [search,setSearch]=useState('');
  const [activeChatId,setActiveChatId]=useState(()=>newId());
  const [drafts,setDrafts]=useState<Record<string,ChatDraft>>({});
- const {prompt,ratio,style,resolution,selected,reference,error}=drafts[activeChatId]||emptyDraft();
+ const {prompt,ratio,style,resolution,selected,reference,mask,error}=drafts[activeChatId]||emptyDraft();
+ const [preview,setPreview]=useState<string|null>(null);const [painting,setPainting]=useState(false);const [painted,setPainted]=useState(false);const maskCanvas=useRef<HTMLCanvasElement>(null);const drawing=useRef(false);
  const [showAbout,setShowAbout]=useState(false);
  const [accessCode,setAccessCode]=useState(()=>{try{return window.sessionStorage.getItem('yero-access-code')||'';}catch{return '';}});
  const [accessDraft,setAccessDraft]=useState('');
@@ -108,7 +109,7 @@ export function MobileStudio(){
  const setStyle=(value:string)=>patchDraft(activeChatRef.current,{style:value});
  const setResolution=(value:string)=>patchDraft(activeChatRef.current,{resolution:value});
  const setSelected=(value:string|null)=>patchDraft(activeChatRef.current,{selected:value});
- const setReference=(value:{name:string;url:string}|null)=>patchDraft(activeChatRef.current,{reference:value});
+ const setReference=(value:{name:string;url:string}|null)=>patchDraft(activeChatRef.current,{reference:value,mask:null});
  const setError=(value:string)=>patchDraft(activeChatRef.current,{error:value});
  const setVoiceStage=(chatId:string,stage:VoiceStage|null)=>{const next={...voiceStatesRef.current};if(stage)next[chatId]=stage;else delete next[chatId];voiceStatesRef.current=next;if(mounted.current)setVoiceStates(next);};
  const openOverlay=(name:Overlay,trigger:HTMLElement)=>{restoreFocus.current=trigger;setClosing(false);setOverlay(name);};
@@ -299,7 +300,7 @@ export function MobileStudio(){
    const submitted=await call('/api/jobs',{method:'POST',headers,body:JSON.stringify(next)});
    if(!/^[0-9a-f]{32}$/.test(submitted.id||''))throw new Error('生图任务创建失败，请重试。');
    if(run!==generation.current)return;updateCreation(item.id,{remoteId:submitted.id});
-   if(draftsRef.current[chatId]?.prompt===rawPrompt)patchDraft(chatId,{prompt:''});
+   const currentDraft=draftsRef.current[chatId];const clear:Partial<ChatDraft>={};if(currentDraft?.prompt===rawPrompt)clear.prompt='';if(currentDraft?.reference?.url===next.reference){clear.reference=null;clear.mask=null;clear.selected=null;}patchDraft(chatId,clear);
    let completed=false;
    for(let attempt=0;attempt<320;attempt++){
     if(run!==generation.current)return;
@@ -315,7 +316,7 @@ export function MobileStudio(){
   }catch(cause){if(run===generation.current){const message=cause instanceof Error?cause.message:'生图服务暂时不可用，请稍后再试。';updateCreation(item.id,{status:'failed',error:message});patchDraft(chatId,{error:message});}}
   finally{running.current.delete(chatId);}
  };
- const submit=(event:React.FormEvent)=>{event.preventDefault();const chatId=activeChatRef.current;if(running.current.has(chatId)||voiceStatesRef.current[chatId])return;if(selected&&!reference){setError('请先上传图片。');if(attachButton.current)openOverlay('upload',attachButton.current);return;}if(!prompt.trim()){setError('先描述一下你想要的画面。');promptRef.current?.focus({preventScroll:true});return;}const next={prompt:prompt.trim(),ratio,style,resolution,reference:reference?.url||null};if(!accessCode){setPendingVoice(null);setPending({brief:next,chatId,rawPrompt:prompt});setAccessDraft('');setAccessError('');if(sendButton.current)openOverlay('access',sendButton.current);return;}void generate(next,accessCode,chatId,prompt);};
+ const submit=(event:React.FormEvent)=>{event.preventDefault();const chatId=activeChatRef.current;if(running.current.has(chatId)||voiceStatesRef.current[chatId])return;if(selected&&!reference){setError('请先上传图片。');if(attachButton.current)openOverlay('upload',attachButton.current);return;}if(!prompt.trim()){setError('先描述一下你想要的画面。');promptRef.current?.focus({preventScroll:true});return;}const next={prompt:prompt.trim(),ratio,style,resolution,reference:reference?.url||null,mask};if(!accessCode){setPendingVoice(null);setPending({brief:next,chatId,rawPrompt:prompt});setAccessDraft('');setAccessError('');if(sendButton.current)openOverlay('access',sendButton.current);return;}void generate(next,accessCode,chatId,prompt);};
  const saveAccess=(event:React.FormEvent)=>{event.preventDefault();const code=accessDraft.trim();if(!code){setAccessError('请输入访问码。');return;}setAccessCode(code);try{window.sessionStorage.setItem('yero-access-code',code);}catch{}setAccessError('');closeOverlay();if(pending){const next=pending;setPending(null);void generate(next.brief,code,next.chatId,next.rawPrompt);}else if(pendingVoice){const chatId=pendingVoice;setPendingVoice(null);void beginVoice(chatId,code);}};
  const readReference=(file?:File)=>{
   if(!file)return;
@@ -334,6 +335,8 @@ export function MobileStudio(){
  const visibleCreations=creations.filter(item=>item.status==='completed'&&(historyFilter!=='收藏'||item.favorite)&&item.brief.prompt.toLowerCase().includes(search.trim().toLowerCase())).sort((a,b)=>b.createdAt-a.createdAt);
  const openChat=(chatId:string)=>{if(chatId!==activeChatRef.current){rememberDraft();leaveVoiceChat();}uploadToken.current++;reader.current?.abort();activeChatRef.current=chatId;setActiveChatId(chatId);setPending(null);setPendingVoice(null);setView('create');closeOverlay();if(fileInput.current)fileInput.current.value='';bottom();};
  const toggleFavorite=(item:Creation)=>{const favorite=!item.favorite;replaceCreations(creationsRef.current.map(entry=>entry.id===item.id?{...entry,favorite}:entry));cacheQueue.current=cacheQueue.current.then(()=>setMessageFavorite(item.id,favorite)).catch(()=>{if(mounted.current)setCacheError('收藏未能保存到本机。');});};
+ const drawMask=(event:React.PointerEvent<HTMLCanvasElement>,start=false)=>{const canvas=event.currentTarget;if(start){drawing.current=true;canvas.setPointerCapture(event.pointerId);}if(!drawing.current)return;const rect=canvas.getBoundingClientRect(),ctx=canvas.getContext('2d');if(!ctx||!rect.width||!rect.height)return;const x=(event.clientX-rect.left)*canvas.width/rect.width,y=(event.clientY-rect.top)*canvas.height/rect.height;ctx.strokeStyle='#4e79ff';ctx.fillStyle='#4e79ff';ctx.lineWidth=Math.max(20,canvas.width*.05);ctx.lineCap='round';ctx.lineJoin='round';if(start){ctx.beginPath();ctx.arc(x,y,ctx.lineWidth/2,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.moveTo(x,y);}else{ctx.lineTo(x,y);ctx.stroke();}setPainted(true);};
+ const applyMask=()=>{const canvas=maskCanvas.current;if(!canvas||!preview||!painted)return;const output=document.createElement('canvas');output.width=canvas.width;output.height=canvas.height;const ctx=output.getContext('2d');if(!ctx)return;ctx.fillStyle='#fff';ctx.fillRect(0,0,output.width,output.height);ctx.globalCompositeOperation='destination-out';ctx.drawImage(canvas,0,0);patchDraft(activeChatRef.current,{reference:{name:'局部修改',url:preview},mask:output.toDataURL('image/png'),resolution:'原图',selected:null,error:''});setPreview(null);setPainting(false);setPainted(false);setView('create');promptRef.current?.focus();};
 
  const uploadPanel=<section ref={dialog} className="settings-sheet upload-sheet" role="dialog" aria-modal="true" aria-labelledby="upload-title">
   <span className="sheet-handle"/>
@@ -359,7 +362,7 @@ export function MobileStudio(){
     <main ref={scrollArea} className="mobile-scroll">
      {view==='templates'?<section className="template-browser"><div className="template-title"><h1>从灵感开始</h1><span>示例模板</span></div><p id="template-upload-note" className="template-upload-note"><Glyph name="image" size={16}/>使用模板前，请先上传一张图片。</p><div className="category-scroll" aria-label="模板分类">{['全部','设计','空间','插画','人像'].map(c=><button key={c} className={category===c?'active':''} aria-pressed={category===c} onClick={()=>setCategory(c)}>{c}</button>)}</div><div key={category} className="mobile-template-grid">{visible.map(t=><button key={t.id} aria-describedby="template-upload-note" className={`mobile-template tile-${t.id}`} onClick={e=>choose(t,e.currentTarget)} aria-label={`使用${t.name}模板`}><TemplateArt template={t}/><span className="template-shade"/><span className="template-requirement"><Glyph name="image" size={12}/>需上传图片</span><span className="mobile-template-label">{t.name}<Glyph name="chevron" size={15}/></span></button>)}</div></section>:activeMessages.length?<section className="mobile-conversation" aria-label="聊天与结果区">{activeMessages.map(item=><article className="conversation-turn" key={item.id}>
       <div className="user-request"><p>{item.brief.prompt}</p><span>{item.brief.style} · {item.brief.ratio} · {item.brief.resolution||'原图'}</span>{item.brief.reference&&<img src={item.brief.reference} alt="本次参考图片"/>}</div>
-      {item.image?<div className="mobile-result has-image"><img className="generated-image" src={item.image} alt="生成的图片"/><div className="result-actions"><a className="save-image" href={item.image} download={item.image.startsWith('data:image/webp')?'Yero-image.webp':'Yero-image.png'}>保存图片</a><button className="result-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div><p>手机可长按图片保存</p></div>:<div className="mobile-result" aria-live="polite">{item.status==='pending'?<span className="generation-loading" aria-hidden="true"><i/><i/><i/></span>:<span className="result-line-icon"><Glyph name="image" size={28}/></span>}<h1>{item.status==='failed'?'暂时没有生成图片':item.status==='completed'?'正在读取图片':'正在生成图片'}</h1><p>{item.status==='failed'?item.error:item.status==='completed'?'正在从本机记录中读取。':'通常需要几分钟，请保持页面打开。'}</p>{item.status==='pending'&&<span className="demo-status">正在处理</span>}</div>}
+      {item.image?<div className="mobile-result has-image"><button type="button" className="image-open" aria-label="放大查看图片" onClick={()=>{setPreview(item.image);setPainting(false);setPainted(false);}}><img className="generated-image" src={item.image} alt="生成的图片"/></button><div className="result-actions"><a className="save-image" href={item.image} download={item.image.startsWith('data:image/webp')?'Yero-image.webp':'Yero-image.png'}>保存图片</a><button className="result-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div><p>点击图片放大或局部修改</p></div>:<div className="mobile-result" aria-live="polite">{item.status==='pending'?<div className="image-wait" aria-hidden="true"><span className="generation-loading"><i/><i/><i/></span></div>:<span className="result-line-icon"><Glyph name="image" size={28}/></span>}<h1>{item.status==='failed'?'暂时没有生成图片':item.status==='completed'?'正在读取图片':'正在生成图片'}</h1><p>{item.status==='failed'?item.error:item.status==='completed'?'正在从本机记录中读取。':'通常需要几分钟，请保持页面打开。'}</p>{item.status==='pending'&&<span className="demo-status">正在处理</span>}</div>}
      </article>)}</section>:<section className="mobile-start"><span className="start-mark"><img className="start-logo" src={yeroLogo} alt=""/></span><h1>让想法，有画面。</h1><p>{selectedTemplate?(reference?`已选择「${selectedTemplate.name}」，可以继续描述。`:'请先上传图片，继续使用模板。'):'写下一个想法，或从模板开始。'}</p></section>}
     </main>
     <div ref={dock} className="mobile-dock">
@@ -373,6 +376,7 @@ export function MobileStudio(){
      </form><p id="preview-note" className="preview-note">{cacheError||'聊天记录保存在本机浏览器'}　<button type="button" onClick={e=>{setPending(null);setPendingVoice(null);setAccessDraft('');setAccessError('');openOverlay('access',e.currentTarget);}}>管理访问码</button></p>
     </div>
    </div>
+   {preview&&<section className="image-viewer" role="dialog" aria-modal="true" aria-label="图片预览"><div className="viewer-header"><button type="button" onClick={()=>{setPreview(null);setPainting(false);}} aria-label="关闭图片预览"><Glyph name="close"/></button><span>{painting?'涂抹要修改的区域':'图片预览'}</span><a href={preview} download="Yero-image.png">保存</a></div><div className="viewer-stage"><div className="viewer-image"><img src={preview} alt="放大的生成图片" onLoad={e=>{const canvas=maskCanvas.current;if(canvas){canvas.width=e.currentTarget.naturalWidth;canvas.height=e.currentTarget.naturalHeight;}}}/><canvas ref={maskCanvas} className={painting?'viewer-mask active':'viewer-mask'} onPointerDown={e=>drawMask(e,true)} onPointerMove={e=>drawMask(e)} onPointerUp={()=>{drawing.current=false;}} onPointerCancel={()=>{drawing.current=false;}}/></div></div><div className="viewer-actions">{painting?<><button type="button" onClick={()=>{const c=maskCanvas.current;c?.getContext('2d')?.clearRect(0,0,c.width,c.height);setPainted(false);}}>清除涂抹</button><button type="button" disabled={!painted} onClick={applyMask}>使用选区</button></>:<button type="button" onClick={()=>setPainting(true)}>涂抹局部修改</button>}</div></section>}
    {overlay&&<div className={`overlay-layer overlay-${overlay}${closing?' is-closing':''}`} onAnimationEnd={event=>{if(closing&&event.target===dialog.current)finishClose();}}>
     <button className="overlay-backdrop" aria-label="关闭弹层遮罩" onClick={closeOverlay}/>
     {overlay==='history'?<aside ref={dialog} className="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-title">
