@@ -40,7 +40,7 @@ assert.equal(JSON.parse(calls[0].opts.body).resolution,'2K');
 assert(document.querySelector('.generated-image')?.src.startsWith('data:image/png;base64,'),'Generated image is displayed');
 assert.equal(document.querySelector('.generated-image').oncontextmenu,null,'Long press is not intercepted');
 assert(document.querySelector('a[download]'),'A direct image save link is present');
-await click(button('放大查看图片'));assert(document.querySelector('.image-viewer'),'Generated image opens in the viewer');
+await click(button('放大查看图片'));assert(document.querySelector('.image-viewer'),'Generated image opens in the viewer');assert.equal(document.querySelector('.viewer-header').nextElementSibling.className,'viewer-actions','Editing tools stay above the image');
 await click(button('涂抹局部修改'));assert(document.querySelector('.viewer-mask.active'),'Drawing mode activates the mask');
 await click(button('关闭图片预览'));assert.equal(document.querySelector('.image-viewer'),null);
 await setValue(document.querySelector('textarea'),'Make another paper airplane');
