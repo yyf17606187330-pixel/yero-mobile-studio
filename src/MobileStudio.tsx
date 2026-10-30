@@ -6,6 +6,7 @@ import './Font.css';
 import './Motion.css';
 import {loadChatIndex,loadMessageMedia,saveChatMessage,setMessageFavorite} from './chatStorage';
 import {PixelWave} from './PixelWave';
+import {PaymentDemo} from './PaymentDemo';
 import type {Brief,Creation,Conversation} from './chatStorage';
 
 type Template={id:string;name:string;group:string;style:string;ratio:string;prompt:string;crop:string};
@@ -20,7 +21,7 @@ export const templates:Template[]=[
 const styles=['自动','品牌海报','立体场景','平面设计','手绘插画','自然摄影'];
 const ratios=['1:1','3:4','4:3','16:9','9:16'];
 const resolutions=['原图','1K','2K','4K'];
-type Overlay='history'|'settings'|'upload'|'access'|null;
+type Overlay='history'|'settings'|'upload'|'access'|'payment'|null;
 const newId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
 type ChatDraft={prompt:string;ratio:string;style:string;resolution:string;selected:string|null;reference:{name:string;url:string}|null;mask:string|null;error:string};
 const emptyDraft=():ChatDraft=>({prompt:'',ratio:'1:1',style:'自动',resolution:'1K',selected:null,reference:null,mask:null,error:''});
@@ -380,9 +381,10 @@ export function MobileStudio(){
    {preview&&<section className="image-viewer" role="dialog" aria-modal="true" aria-label="图片预览"><div className="viewer-header"><button type="button" onClick={()=>{setPreview(null);setPainting(false);}} aria-label="关闭图片预览"><Glyph name="close"/></button><span>{painting?'涂抹要修改的区域':'图片预览'}</span><a href={preview} download="Yero-image.png">保存</a></div><div className="viewer-actions" aria-label="图片编辑工具">{painting?<><button type="button" onClick={()=>{const c=maskCanvas.current;c?.getContext('2d')?.clearRect(0,0,c.width,c.height);setPainted(false);}}>清除涂抹</button><button type="button" className="viewer-primary" disabled={!painted} onClick={applyMask}>使用选区</button></>:<button type="button" className="viewer-primary" onClick={()=>setPainting(true)}><Glyph name="edit" size={18}/>涂抹局部修改</button>}</div><div className="viewer-stage"><div className="viewer-image"><img src={preview} alt="放大的生成图片" onLoad={e=>{const canvas=maskCanvas.current;if(canvas){canvas.width=e.currentTarget.naturalWidth;canvas.height=e.currentTarget.naturalHeight;}}}/><canvas ref={maskCanvas} className={painting?'viewer-mask active':'viewer-mask'} onPointerDown={e=>drawMask(e,true)} onPointerMove={e=>drawMask(e)} onPointerUp={()=>{drawing.current=false;}} onPointerCancel={()=>{drawing.current=false;}}/></div></div></section>}
    {overlay&&<div className={`overlay-layer overlay-${overlay}${closing?' is-closing':''}`} onAnimationEnd={event=>{if(closing&&event.target===dialog.current)finishClose();}}>
     <button className="overlay-backdrop" aria-label="关闭弹层遮罩" onClick={closeOverlay}/>
-    {overlay==='history'?<aside ref={dialog} className="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-title">
+    {overlay==='payment'?<section ref={dialog} className="settings-sheet payment-sheet" role="dialog" aria-modal="true" aria-label="模拟付款"><PaymentDemo onClose={closeOverlay}/></section>:overlay==='history'?<aside ref={dialog} className="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-title">
      <div className="drawer-profile"><span className="drawer-avatar"><img src={yeroLogo} alt=""/></span><div><strong>Yero</strong><p>我的创作空间</p></div><button data-initial-focus className="round-button" aria-label="关闭侧边栏" onClick={closeOverlay}><Glyph name="chevron"/></button></div>
      <button className="drawer-new" onClick={startNew}><Glyph name="plus" size={20}/>新建聊天</button>
+     <button className="drawer-payment" onClick={e=>openOverlay('payment',root.current?.querySelector<HTMLElement>('[aria-label="打开侧边栏"]')||e.currentTarget)}>测试订单</button>
      <div className="history-tabs">{['聊天','图片','收藏'].map(c=><button key={c} aria-pressed={historyFilter===c} className={historyFilter===c?'active':''} onClick={()=>setHistoryFilter(c)}>{c}</button>)}</div>
      <div className="history-title"><h2 id="history-title">{historyFilter==='聊天'?'聊天记录':historyFilter==='收藏'?'我的收藏':'我的图片'}</h2><span>{historyFilter==='聊天'?`${conversations.length} 条`:`${visibleCreations.length} 张`}</span></div>
      {cacheLoading&&!conversations.length?<div className="history-empty" aria-live="polite"><p>正在读取本地记录…</p></div>:historyFilter==='聊天'?(visibleChats.length?<div className="chat-list">{visibleChats.map(chat=><button key={chat.id} className={`chat-open ${activeChatId===chat.id?'active':''}`} onClick={()=>openChat(chat.id)}><span>{chat.title}</span><small>{new Date(chat.updatedAt).toLocaleDateString('zh-CN',{month:'short',day:'numeric'})}</small></button>)}</div>:<div className="history-empty" aria-live="polite"><Glyph name="edit" size={30}/><h3>{search?'没有匹配的聊天':'还没有聊天记录'}</h3><p>{search?'可以清除搜索后再看看。':'开始创作后，聊天会保存在本机。'}</p>{search&&<button onClick={()=>setSearch('')}>清除搜索</button>}</div>):visibleCreations.length?<div className="history-list">{visibleCreations.map(item=><div className="history-item" key={item.id}><button className="history-open" onClick={()=>openChat(item.chatId)}>{item.image?<img src={item.image} alt=""/>:<span className="history-image-placeholder"><Glyph name="image" size={20}/></span>}<span>{item.brief.prompt}</span></button><button className="history-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div>)}</div>:<div className="history-empty" aria-live="polite"><Glyph name="image" size={30}/><h3>{search?'没有匹配的图片':historyFilter==='收藏'?'还没有收藏':'还没有作品'}</h3><p>{search?'可以清除搜索后再看看。':historyFilter==='收藏'?'收藏后的图片会显示在这里。':'生成的图片会显示在这里。'}</p>{search&&<button onClick={()=>setSearch('')}>清除搜索</button>}</div>}

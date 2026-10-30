@@ -3,7 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 const dir=path.dirname(fileURLToPath(import.meta.url));
-const source=await fs.readFile(path.join(dir,'src/MobileStudio.tsx'),'utf8');
+const source=(await Promise.all(['MobileStudio.tsx','PaymentDemo.tsx','paymentTest.ts'].map(file=>fs.readFile(path.join(dir,'src',file),'utf8')))).join('');
 const chars=[...new Set([...source].filter(c=>c.codePointAt(0)>127))].sort().join('');
 const fontPath=path.join(dir,'src/Font.css');
 const characterPath=path.join(dir,'font-characters.txt');
