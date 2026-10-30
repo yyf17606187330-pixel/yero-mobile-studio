@@ -7,6 +7,7 @@ class MemoryKV {
  async put(key,value){this.values.set(key,typeof value==='string'?new TextEncoder().encode(value):new Uint8Array(value));}
  async get(key,options){const value=this.values.get(key);if(!value)return null;return options?.type==='arrayBuffer'?value.slice().buffer:new TextDecoder().decode(value);}
  async list({prefix}){return {keys:[...this.values.keys()].filter(key=>key.startsWith(prefix)).map(name=>({name})),list_complete:true};}
+ async delete(key){this.values.delete(key);}
 }
 const request=(path,options={})=>new Request('https://yero.example'+path,options);
 const key='01'.repeat(32);
@@ -37,4 +38,29 @@ test('missing storage configuration fails closed and other APIs stay unavailable
  const env=makeEnv();delete env.YERO_STORAGE_KEY;
  assert.equal((await worker.fetch(request('/api/jobs',{method:'POST',headers:human,body:'{}'}),env)).status,503);
  assert.equal((await worker.fetch(request('/api/models',{headers:human}),env)).status,404);
+});
+
+test('voice jobs use a separate encrypted queue and return text through the protected job endpoint',async()=>{
+ const env=makeEnv();const payload={audio:'data:audio/webm;base64,GkXfo0E='};
+ assert.equal((await worker.fetch(request('/api/transcriptions',{method:'POST',body:JSON.stringify(payload)}),env)).status,401);
+ const submitted=await worker.fetch(request('/api/transcriptions',{method:'POST',headers:human,body:JSON.stringify(payload)}),env);
+ assert.equal(submitted.status,202);const {id}=await submitted.json();assert.match(id,/^[a-f0-9]{32}$/);
+ const stored=env.YERO_QUEUE.values.get('s/'+id);assert(stored);assert(!new TextDecoder().decode(stored).includes(payload.audio));
+ assert.equal((await worker.fetch(request('/api/runner/next?force=1',{headers:runner}),env)).status,204,'Image runner never consumes voice jobs');
+ assert.equal((await worker.fetch(request('/api/runner/voice-next?force=1'),env)).status,401);
+ const next=await worker.fetch(request('/api/runner/voice-next?force=1',{headers:runner}),env);
+ assert.equal(next.status,200);assert.equal(next.headers.get('X-Yero-Job'),id);assert.deepEqual(JSON.parse(await decrypt(await next.arrayBuffer())),payload);
+ const encryptedResult=await encrypt(JSON.stringify({status:'completed',text:'紫色海报'}));
+ const done=await worker.fetch(request('/api/runner/voice-result/'+id,{method:'POST',headers:runner,body:encryptedResult}),env);
+ assert.equal(done.status,200);assert.equal(env.YERO_QUEUE.values.has('s/'+id),false,'Processed audio is removed from the queue');
+ const result=await worker.fetch(request('/api/jobs/'+id,{headers:human}),env);assert.deepEqual(await result.json(),{status:'completed',text:'紫色海报'});
+});
+
+test('voice requests reject missing, invalid or oversized audio',async()=>{
+ const env=makeEnv();
+ for(const payload of [{},{audio:'data:text/plain;base64,AAAA'},{audio:'data:audio/webm;base64,not valid'}]){
+  const response=await worker.fetch(request('/api/transcriptions',{method:'POST',headers:human,body:JSON.stringify(payload)}),env);assert.equal(response.status,400);
+ }
+ const oversized=await worker.fetch(request('/api/transcriptions',{method:'POST',headers:human,body:JSON.stringify({audio:'data:audio/webm;base64,'+'A'.repeat(3*1024*1024)})}),env);
+ assert.equal(oversized.status,413);
 });

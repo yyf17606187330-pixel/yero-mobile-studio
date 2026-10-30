@@ -13,11 +13,14 @@
 !test_cloud_session.mjs
 !test_live_ui.mjs
 !test_session_isolation.mjs
+!test_voice_ui.mjs
 !test_worker.mjs
 !test_yero_relay.py
 !test_yero_runner.py
+!test_yero_voice.py
 !yero_relay.py
 !yero_runner.py
+!yero_voice.py
 !src/
 !src/**
 !assets/

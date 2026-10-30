@@ -23,6 +23,8 @@ type Overlay='history'|'settings'|'upload'|'access'|null;
 const newId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
 type ChatDraft={prompt:string;ratio:string;style:string;resolution:string;selected:string|null;reference:{name:string;url:string}|null;error:string};
 const emptyDraft=():ChatDraft=>({prompt:'',ratio:'1:1',style:'自动',resolution:'1K',selected:null,reference:null,error:''});
+type VoiceStage='starting'|'recording'|'transcribing';
+type VoiceRecording={chatId:string;code:string;recorder:MediaRecorder;stream:MediaStream;chunks:Blob[];timer:number;bytes:number;cancelled:boolean;released:boolean;tooLarge:boolean};
 
 function Glyph({name,size=22}:{name:string;size?:number}){
  const paths:Record<string,React.ReactNode>={
@@ -30,6 +32,8 @@ function Glyph({name,size=22}:{name:string;size?:number}){
   plus:<path d="M12 5v14M5 12h14"/>,
   close:<path d="m6 6 12 12M18 6 6 18"/>,
   arrow:<path d="M12 20V4m-6 6 6-6 6 6"/>,
+  mic:<><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21m-3 0h6"/></>,
+  stop:<rect x="7" y="7" width="10" height="10" rx="2"/>,
   search:<><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></>,
   image:<><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-7 5 8"/></>,
   edit:<><path d="m14 5 5 5M4 20l5-1L21 7a2 2 0 0 0-4-4L5 15Z"/></>,
@@ -64,6 +68,8 @@ export function MobileStudio(){
  const [accessDraft,setAccessDraft]=useState('');
  const [accessError,setAccessError]=useState('');
  const [pending,setPending]=useState<{brief:Brief;chatId:string;rawPrompt:string}|null>(null);
+ const [pendingVoice,setPendingVoice]=useState<string|null>(null);
+ const [voiceStates,setVoiceStates]=useState<Record<string,VoiceStage>>({});
  const [creations,setCreations]=useState<Creation[]>([]);
  const [conversations,setConversations]=useState<Conversation[]>([]);
  const [cacheError,setCacheError]=useState('');
@@ -75,6 +81,7 @@ export function MobileStudio(){
  const fileInput=useRef<HTMLInputElement>(null);
  const attachButton=useRef<HTMLButtonElement>(null);
  const sendButton=useRef<HTMLButtonElement>(null);
+ const voiceButton=useRef<HTMLButtonElement>(null);
  const dialog=useRef<HTMLElement>(null);
  const restoreFocus=useRef<HTMLElement|null>(null);
  const uploadToken=useRef(0);
@@ -88,6 +95,10 @@ export function MobileStudio(){
  const cacheQueue=useRef<Promise<void>>(Promise.resolve());
  const mediaLoading=useRef(new Set<string>());
  const mounted=useRef(true);
+ const voiceStatesRef=useRef<Record<string,VoiceStage>>({});
+ const voiceRecording=useRef<VoiceRecording|null>(null);
+ const voiceStarting=useRef<{chatId:string;token:number}|null>(null);
+ const voiceToken=useRef(0);
  const patchDraft=(chatId:string,change:Partial<ChatDraft>)=>{
   const next={...(draftsRef.current[chatId]||emptyDraft()),...change};
   draftsRef.current={...draftsRef.current,[chatId]:next};setDrafts(draftsRef.current);
@@ -99,6 +110,7 @@ export function MobileStudio(){
  const setSelected=(value:string|null)=>patchDraft(activeChatRef.current,{selected:value});
  const setReference=(value:{name:string;url:string}|null)=>patchDraft(activeChatRef.current,{reference:value});
  const setError=(value:string)=>patchDraft(activeChatRef.current,{error:value});
+ const setVoiceStage=(chatId:string,stage:VoiceStage|null)=>{const next={...voiceStatesRef.current};if(stage)next[chatId]=stage;else delete next[chatId];voiceStatesRef.current=next;if(mounted.current)setVoiceStates(next);};
  const openOverlay=(name:Overlay,trigger:HTMLElement)=>{restoreFocus.current=trigger;setClosing(false);setOverlay(name);};
  const finishClose=()=>{setOverlay(null);setClosing(false);};
  const closeOverlay=()=>{
@@ -116,6 +128,84 @@ export function MobileStudio(){
   const next={...current,...change};replaceCreations(creationsRef.current.map(item=>item.id===id?next:item));
   const chat=conversationsRef.current.find(item=>item.id===next.chatId);if(chat)persist(chat,next);
  };
+ function releaseVoice(entry:VoiceRecording){if(!entry.released){entry.released=true;entry.stream.getTracks().forEach(track=>track.stop());}}
+ function stopVoice(cancel=false){
+  const entry=voiceRecording.current;if(!entry)return;
+  entry.cancelled=entry.cancelled||cancel;window.clearTimeout(entry.timer);
+  try{if(entry.recorder.state!=='inactive')entry.recorder.stop();}catch{entry.cancelled=true;voiceRecording.current=null;setVoiceStage(entry.chatId,null);}
+  releaseVoice(entry);
+ }
+ function leaveVoiceChat(){
+  const starting=voiceStarting.current;if(starting?.chatId===activeChatRef.current){voiceToken.current++;voiceStarting.current=null;setVoiceStage(starting.chatId,null);}
+  if(voiceRecording.current?.chatId===activeChatRef.current)stopVoice();
+ }
+ async function transcribeVoice(entry:VoiceRecording){
+  const {chatId,code}=entry;const run=generation.current;
+  try{
+   const mime=(entry.recorder.mimeType||entry.chunks[0]?.type||'').split(';')[0].toLowerCase();
+   if(!['audio/webm','audio/mp4','audio/ogg','audio/mpeg','audio/wav','audio/x-wav'].includes(mime))throw new Error('此浏览器的录音格式暂不支持。');
+   const blob=new window.Blob(entry.chunks,{type:mime});
+   if(!blob.size)throw new Error('没有录到声音，请再试一次。');
+   if(blob.size>2*1024*1024)throw new Error('录音过大，请缩短后重试。');
+   const audio=await new Promise<string>((resolve,reject)=>{const fileReader=new window.FileReader();fileReader.onload=()=>typeof fileReader.result==='string'?resolve(fileReader.result):reject(new Error('无法读取录音。'));fileReader.onerror=()=>reject(new Error('无法读取录音。'));fileReader.readAsDataURL(blob);});
+   if(run!==generation.current)return;
+   const headers={'Content-Type':'application/json','Authorization':'Bearer '+code};
+   const call=async(url:string,options:RequestInit)=>{
+    const controller=new AbortController();const timeout=window.setTimeout(()=>controller.abort(),25000);
+    try{const response=await fetch(url,{...options,signal:controller.signal});const data=await response.json().catch(()=>({}));
+     if(!response.ok){if(response.status===401){setAccessCode(current=>current===code?'':current);try{if(window.sessionStorage.getItem('yero-access-code')===code)window.sessionStorage.removeItem('yero-access-code');}catch{}}throw new Error(typeof data.error==='string'?data.error:'语音转录暂时不可用，请重试。');}return data;
+    }finally{window.clearTimeout(timeout);}
+   };
+   const submitted=await call('/api/transcriptions',{method:'POST',headers,body:JSON.stringify({audio})});
+   if(!/^[0-9a-f]{32}$/.test(submitted.id||''))throw new Error('语音提交失败，请重试。');
+   for(let attempt=0;attempt<45;attempt++){
+    if(run!==generation.current)return;
+    const job=await call('/api/jobs/'+submitted.id,{method:'GET',headers});
+    if(job.status==='failed')throw new Error(typeof job.error==='string'?job.error:'语音转录失败，请重试。');
+    if(job.status==='completed'){
+     if(typeof job.text!=='string'||!job.text.trim())throw new Error('没有听清内容，请再说一次。');
+     const current=draftsRef.current[chatId]||emptyDraft();const separator=current.prompt.trim()&&!/\s$/.test(current.prompt)?' ':'';
+     const remaining=4000-current.prompt.length-separator.length;if(remaining<=0)throw new Error('输入框已满，请精简内容后重试。');
+     patchDraft(chatId,{prompt:current.prompt+separator+job.text.trim().slice(0,remaining),error:''});return;
+    }
+    await new Promise(resolve=>window.setTimeout(resolve,2000));
+   }
+   throw new Error('语音转录等待超时，请重试。');
+  }catch(cause){if(run===generation.current&&mounted.current){const message=cause instanceof Error&&cause.name==='AbortError'?'语音连接超时，请重试。':cause instanceof Error?cause.message:'语音转录暂时不可用，请重试。';patchDraft(chatId,{error:message});}}
+  finally{if(run===generation.current)setVoiceStage(chatId,null);}
+ }
+ async function beginVoice(chatId:string,code:string){
+  if(voiceRecording.current||voiceStatesRef.current[chatId])return;
+  if(!window.MediaRecorder||!window.navigator.mediaDevices?.getUserMedia){patchDraft(chatId,{error:'当前浏览器不支持录音，请换用支持麦克风的浏览器。'});return;}
+  const token=++voiceToken.current;voiceStarting.current={chatId,token};setVoiceStage(chatId,'starting');patchDraft(chatId,{error:''});
+  let stream:MediaStream|undefined;
+  try{
+   stream=await window.navigator.mediaDevices.getUserMedia({audio:true});
+   if(!mounted.current||token!==voiceToken.current||activeChatRef.current!==chatId){stream.getTracks().forEach(track=>track.stop());return;}
+   voiceStarting.current=null;
+   const supported=['audio/webm;codecs=opus','audio/mp4','audio/webm','audio/ogg;codecs=opus'].find(type=>window.MediaRecorder.isTypeSupported?.(type));
+   let recorder:MediaRecorder;try{recorder=new window.MediaRecorder(stream,supported?{mimeType:supported,audioBitsPerSecond:32000}:{audioBitsPerSecond:32000});}catch{recorder=new window.MediaRecorder(stream);}
+   const entry:VoiceRecording={chatId,code,recorder,stream,chunks:[],timer:0,bytes:0,cancelled:false,released:false,tooLarge:false};voiceRecording.current=entry;
+   recorder.ondataavailable=event=>{if(event.data.size){entry.chunks.push(event.data);entry.bytes+=event.data.size;if(entry.bytes>2*1024*1024){entry.tooLarge=true;stopVoice();}}};
+   recorder.onerror=()=>{entry.cancelled=true;stopVoice(true);if(mounted.current){setVoiceStage(chatId,null);patchDraft(chatId,{error:'录音中断，请重试。'});}};
+   recorder.onstop=()=>{window.clearTimeout(entry.timer);releaseVoice(entry);if(voiceRecording.current===entry)voiceRecording.current=null;
+    if(!mounted.current||entry.cancelled){setVoiceStage(chatId,null);return;}
+    if(entry.tooLarge){setVoiceStage(chatId,null);patchDraft(chatId,{error:'录音过大，请缩短后重试。'});return;}
+    setVoiceStage(chatId,'transcribing');void transcribeVoice(entry);
+   };
+   recorder.start(1000);entry.timer=window.setTimeout(()=>stopVoice(),55000);setVoiceStage(chatId,'recording');if(activeChatRef.current===chatId)setView('create');
+  }catch(cause){
+   if(voiceRecording.current&&voiceRecording.current.stream===stream){const entry=voiceRecording.current;entry.cancelled=true;window.clearTimeout(entry.timer);releaseVoice(entry);}else if(stream)stream.getTracks().forEach(track=>track.stop());
+   if(token===voiceToken.current&&mounted.current){voiceStarting.current=null;voiceRecording.current=null;setVoiceStage(chatId,null);const name=cause&&typeof cause==='object'&&'name' in cause?String(cause.name):'';patchDraft(chatId,{error:name==='NotAllowedError'||name==='SecurityError'?'请允许麦克风权限后重试。':name==='NotFoundError'?'没有检测到麦克风。':'无法开始录音，请重试。'});}
+  }
+ }
+ function requestVoice(){
+  const chatId=activeChatRef.current,stage=voiceStatesRef.current[chatId];
+  if(stage==='recording'){stopVoice();return;}
+  if(stage||voiceRecording.current)return;
+  if(!accessCode){setPending(null);setPendingVoice(chatId);setAccessDraft('');setAccessError('');if(voiceButton.current)openOverlay('access',voiceButton.current);return;}
+  void beginVoice(chatId,accessCode);
+ }
 
  useEffect(()=>{
   let live=true;loadChatIndex().then(saved=>{
@@ -180,18 +270,18 @@ export function MobileStudio(){
   window.addEventListener('keydown',key);
   return()=>{document.body.style.overflow=prior;window.removeEventListener('keydown',key);restoreFocus.current?.focus({preventScroll:true});};
  },[overlay]);
- useEffect(()=>()=>{mounted.current=false;uploadToken.current++;generation.current++;reader.current?.abort();},[]);
+ useEffect(()=>()=>{mounted.current=false;uploadToken.current++;generation.current++;voiceToken.current++;reader.current?.abort();stopVoice(true);},[]);
  const top=()=>{if(scrollArea.current)scrollArea.current.scrollTop=0;};
  const bottom=()=>{window.setTimeout(()=>{if(scrollArea.current)scrollArea.current.scrollTop=scrollArea.current.scrollHeight;},0);};
  const rememberDraft=()=>{
-  const id=activeChatRef.current;const draft=draftsRef.current[id];
-  if(!draft||(!draft.prompt.trim()&&!draft.selected&&!draft.reference)||conversationsRef.current.some(chat=>chat.id===id))return;
-  const now=Date.now();const title=draft.prompt.trim().slice(0,36)||templates.find(item=>item.id===draft.selected)?.name||'未发送的草稿';
+  const id=activeChatRef.current;const draft=draftsRef.current[id]||emptyDraft();
+  if((!draft.prompt.trim()&&!draft.selected&&!draft.reference&&!voiceStatesRef.current[id])||conversationsRef.current.some(chat=>chat.id===id))return;
+  const now=Date.now();const title=draft.prompt.trim().slice(0,36)||templates.find(item=>item.id===draft.selected)?.name||(voiceStatesRef.current[id]?'语音草稿':'未发送的草稿');
   replaceConversations([{id,title,createdAt:now,updatedAt:now},...conversationsRef.current]);
  };
  const switchView=(value:'create'|'templates')=>{setView(value);top();};
  const choose=(template:Template,trigger:HTMLElement)=>{uploadToken.current++;reader.current?.abort();setSelected(template.id);setPrompt(template.prompt);setRatio(template.ratio);setStyle(template.style);setError('');if(reference){setView('create');bottom();}else openOverlay('upload',trigger);};
- const startNew=()=>{rememberDraft();uploadToken.current++;reader.current?.abort();const nextId=newId();activeChatRef.current=nextId;setActiveChatId(nextId);setPending(null);setView('create');closeOverlay();if(fileInput.current)fileInput.current.value='';top();};
+ const startNew=()=>{rememberDraft();leaveVoiceChat();uploadToken.current++;reader.current?.abort();const nextId=newId();activeChatRef.current=nextId;setActiveChatId(nextId);setPending(null);setPendingVoice(null);setView('create');closeOverlay();if(fileInput.current)fileInput.current.value='';top();};
  const generate=async(next:Brief,code:string,chatId:string,rawPrompt:string)=>{
   if(running.current.has(chatId))return;
   running.current.add(chatId);const run=generation.current;const now=Date.now();const existing=conversationsRef.current.find(item=>item.id===chatId);
@@ -225,8 +315,8 @@ export function MobileStudio(){
   }catch(cause){if(run===generation.current){const message=cause instanceof Error?cause.message:'生图服务暂时不可用，请稍后再试。';updateCreation(item.id,{status:'failed',error:message});patchDraft(chatId,{error:message});}}
   finally{running.current.delete(chatId);}
  };
- const submit=(event:React.FormEvent)=>{event.preventDefault();const chatId=activeChatRef.current;if(running.current.has(chatId))return;if(selected&&!reference){setError('请先上传图片。');if(attachButton.current)openOverlay('upload',attachButton.current);return;}if(!prompt.trim()){setError('先描述一下你想要的画面。');promptRef.current?.focus({preventScroll:true});return;}const next={prompt:prompt.trim(),ratio,style,resolution,reference:reference?.url||null};if(!accessCode){setPending({brief:next,chatId,rawPrompt:prompt});setAccessDraft('');setAccessError('');if(sendButton.current)openOverlay('access',sendButton.current);return;}void generate(next,accessCode,chatId,prompt);};
- const saveAccess=(event:React.FormEvent)=>{event.preventDefault();const code=accessDraft.trim();if(!code){setAccessError('请输入访问码。');return;}setAccessCode(code);try{window.sessionStorage.setItem('yero-access-code',code);}catch{}setAccessError('');closeOverlay();if(pending){const next=pending;setPending(null);void generate(next.brief,code,next.chatId,next.rawPrompt);}};
+ const submit=(event:React.FormEvent)=>{event.preventDefault();const chatId=activeChatRef.current;if(running.current.has(chatId)||voiceStatesRef.current[chatId])return;if(selected&&!reference){setError('请先上传图片。');if(attachButton.current)openOverlay('upload',attachButton.current);return;}if(!prompt.trim()){setError('先描述一下你想要的画面。');promptRef.current?.focus({preventScroll:true});return;}const next={prompt:prompt.trim(),ratio,style,resolution,reference:reference?.url||null};if(!accessCode){setPendingVoice(null);setPending({brief:next,chatId,rawPrompt:prompt});setAccessDraft('');setAccessError('');if(sendButton.current)openOverlay('access',sendButton.current);return;}void generate(next,accessCode,chatId,prompt);};
+ const saveAccess=(event:React.FormEvent)=>{event.preventDefault();const code=accessDraft.trim();if(!code){setAccessError('请输入访问码。');return;}setAccessCode(code);try{window.sessionStorage.setItem('yero-access-code',code);}catch{}setAccessError('');closeOverlay();if(pending){const next=pending;setPending(null);void generate(next.brief,code,next.chatId,next.rawPrompt);}else if(pendingVoice){const chatId=pendingVoice;setPendingVoice(null);void beginVoice(chatId,code);}};
  const readReference=(file?:File)=>{
   if(!file)return;
   if(!['image/png','image/jpeg','image/webp'].includes(file.type)){setError('请选择 JPG、PNG 或 WebP 图片。');return;}
@@ -239,9 +329,10 @@ export function MobileStudio(){
  const selectedTemplate=templates.find(t=>t.id===selected);
  const activeMessages=creations.filter(item=>item.chatId===activeChatId).sort((a,b)=>a.createdAt-b.createdAt);
  const generating=activeMessages.some(item=>item.status==='pending');
+ const voiceStage=voiceStates[activeChatId];
  const visibleChats=conversations.filter(chat=>!search.trim()||chat.title.toLowerCase().includes(search.trim().toLowerCase())||creations.some(item=>item.chatId===chat.id&&item.brief.prompt.toLowerCase().includes(search.trim().toLowerCase()))).sort((a,b)=>b.updatedAt-a.updatedAt);
  const visibleCreations=creations.filter(item=>item.status==='completed'&&(historyFilter!=='收藏'||item.favorite)&&item.brief.prompt.toLowerCase().includes(search.trim().toLowerCase())).sort((a,b)=>b.createdAt-a.createdAt);
- const openChat=(chatId:string)=>{rememberDraft();uploadToken.current++;reader.current?.abort();activeChatRef.current=chatId;setActiveChatId(chatId);setPending(null);setView('create');closeOverlay();if(fileInput.current)fileInput.current.value='';bottom();};
+ const openChat=(chatId:string)=>{if(chatId!==activeChatRef.current){rememberDraft();leaveVoiceChat();}uploadToken.current++;reader.current?.abort();activeChatRef.current=chatId;setActiveChatId(chatId);setPending(null);setPendingVoice(null);setView('create');closeOverlay();if(fileInput.current)fileInput.current.value='';bottom();};
  const toggleFavorite=(item:Creation)=>{const favorite=!item.favorite;replaceCreations(creationsRef.current.map(entry=>entry.id===item.id?{...entry,favorite}:entry));cacheQueue.current=cacheQueue.current.then(()=>setMessageFavorite(item.id,favorite)).catch(()=>{if(mounted.current)setCacheError('收藏未能保存到本机。');});};
 
  const uploadPanel=<section ref={dialog} className="settings-sheet upload-sheet" role="dialog" aria-modal="true" aria-labelledby="upload-title">
@@ -254,10 +345,10 @@ export function MobileStudio(){
  </section>;
 
  const accessPanel=<section ref={dialog} className="settings-sheet access-sheet" role="dialog" aria-modal="true" aria-labelledby="access-title">
-  <span className="sheet-handle"/><div className="sheet-heading"><h2 id="access-title">连接生图服务</h2><button className="round-button" aria-label="关闭访问码" onClick={closeOverlay}><Glyph name="close"/></button></div>
+  <span className="sheet-handle"/><div className="sheet-heading"><h2 id="access-title">连接生图服务</h2><button className="round-button" aria-label="关闭访问码" onClick={()=>{setPendingVoice(null);closeOverlay();}}><Glyph name="close"/></button></div>
   <p className="access-note">输入测试访问码。参考图和描述会发送至生图服务处理。</p>
   <form onSubmit={saveAccess}><label htmlFor="access-code">访问码</label><input data-initial-focus id="access-code" type="password" autoComplete="off" value={accessDraft} onChange={e=>{setAccessDraft(e.target.value);setAccessError('');}} placeholder="输入访问码"/>
-   {accessError&&<p className="mobile-error" role="alert">{accessError}</p>}<button className="sheet-done" type="submit">{pending?'连接并生成':'保存访问码'}</button></form>
+   {accessError&&<p className="mobile-error" role="alert">{accessError}</p>}<button className="sheet-done" type="submit">{pending?'连接并生成':pendingVoice?'连接并录音':'保存访问码'}</button></form>
  </section>;
 
  return <div ref={root} className={`mobile-studio mode-${theme}`}>
@@ -268,7 +359,7 @@ export function MobileStudio(){
     <main ref={scrollArea} className="mobile-scroll">
      {view==='templates'?<section className="template-browser"><div className="template-title"><h1>从灵感开始</h1><span>示例模板</span></div><p id="template-upload-note" className="template-upload-note"><Glyph name="image" size={16}/>使用模板前，请先上传一张图片。</p><div className="category-scroll" aria-label="模板分类">{['全部','设计','空间','插画','人像'].map(c=><button key={c} className={category===c?'active':''} aria-pressed={category===c} onClick={()=>setCategory(c)}>{c}</button>)}</div><div key={category} className="mobile-template-grid">{visible.map(t=><button key={t.id} aria-describedby="template-upload-note" className={`mobile-template tile-${t.id}`} onClick={e=>choose(t,e.currentTarget)} aria-label={`使用${t.name}模板`}><TemplateArt template={t}/><span className="template-shade"/><span className="template-requirement"><Glyph name="image" size={12}/>需上传图片</span><span className="mobile-template-label">{t.name}<Glyph name="chevron" size={15}/></span></button>)}</div></section>:activeMessages.length?<section className="mobile-conversation" aria-label="聊天与结果区">{activeMessages.map(item=><article className="conversation-turn" key={item.id}>
       <div className="user-request"><p>{item.brief.prompt}</p><span>{item.brief.style} · {item.brief.ratio} · {item.brief.resolution||'原图'}</span>{item.brief.reference&&<img src={item.brief.reference} alt="本次参考图片"/>}</div>
-      {item.image?<div className="mobile-result has-image"><img className="generated-image" src={item.image} alt="生成的图片"/><div className="result-actions"><a className="save-image" href={item.image} download={item.image.startsWith('data:image/webp')?'Yero-image.webp':'Yero-image.png'}>保存图片</a><button className="result-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div><p>手机可长按图片保存</p></div>:<div className="mobile-result" aria-live="polite"><span className="result-line-icon"><Glyph name="image" size={28}/></span><h1>{item.status==='failed'?'暂时没有生成图片':item.status==='completed'?'正在读取图片':'正在生成图片'}</h1><p>{item.status==='failed'?item.error:item.status==='completed'?'正在从本机记录中读取。':'通常需要几分钟，请保持页面打开。'}</p>{item.status==='pending'&&<span className="demo-status">正在处理</span>}</div>}
+      {item.image?<div className="mobile-result has-image"><img className="generated-image" src={item.image} alt="生成的图片"/><div className="result-actions"><a className="save-image" href={item.image} download={item.image.startsWith('data:image/webp')?'Yero-image.webp':'Yero-image.png'}>保存图片</a><button className="result-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div><p>手机可长按图片保存</p></div>:<div className="mobile-result" aria-live="polite">{item.status==='pending'?<span className="generation-loading" aria-hidden="true"><i/><i/><i/></span>:<span className="result-line-icon"><Glyph name="image" size={28}/></span>}<h1>{item.status==='failed'?'暂时没有生成图片':item.status==='completed'?'正在读取图片':'正在生成图片'}</h1><p>{item.status==='failed'?item.error:item.status==='completed'?'正在从本机记录中读取。':'通常需要几分钟，请保持页面打开。'}</p>{item.status==='pending'&&<span className="demo-status">正在处理</span>}</div>}
      </article>)}</section>:<section className="mobile-start"><span className="start-mark"><img className="start-logo" src={yeroLogo} alt=""/></span><h1>让想法，有画面。</h1><p>{selectedTemplate?(reference?`已选择「${selectedTemplate.name}」，可以继续描述。`:'请先上传图片，继续使用模板。'):'写下一个想法，或从模板开始。'}</p></section>}
     </main>
     <div ref={dock} className="mobile-dock">
@@ -276,9 +367,10 @@ export function MobileStudio(){
      <form className={`mobile-composer ${error?'invalid':''}`} onSubmit={submit}>
       {(selectedTemplate||reference)&&<div className="composer-attachments">{selectedTemplate&&<span className="template-token"><span className="mini-template"><TemplateArt template={selectedTemplate}/></span>{selectedTemplate.name}{!reference&&<small>待上传</small>}<button type="button" aria-label="移除模板标记" onClick={()=>{setSelected(null);setError('');}}><Glyph name="close" size={14}/></button></span>}{reference&&<span className="reference-token"><img src={reference.url} alt="已选择的参考图"/><span>参考图</span><button type="button" aria-label="移除参考图" onClick={()=>{uploadToken.current++;setReference(null);if(fileInput.current)fileInput.current.value='';}}><Glyph name="close" size={14}/></button></span>}</div>}
       <label className="visually-hidden" htmlFor="mobile-prompt">描述你想生成的图片</label><textarea id="mobile-prompt" ref={promptRef} value={prompt} maxLength={4000} onChange={e=>{setPrompt(e.target.value);setError('');}} rows={2} placeholder="描述你想创作的画面…" aria-invalid={!!error} aria-describedby={error?'mobile-error':'preview-note'}/>
-      <div className="mobile-composer-tools"><div className="mobile-tools-left"><button type="button" ref={attachButton} className="attach-button" aria-label="添加本地参考图" title="参考图会发送至生图服务处理" onClick={e=>selected&&!reference?openOverlay('upload',e.currentTarget):fileInput.current?.click()}><Glyph name="plus" size={26}/></button><button type="button" className="setting-chip" aria-label={`画面比例 ${ratio}`} onClick={e=>openOverlay('settings',e.currentTarget)}><span className="ratio-icon"/>{ratio}<span className="resolution-inline">{resolution}</span><Glyph name="down" size={12}/></button><button type="button" className="setting-chip style-chip" aria-label={`图片风格 ${style}`} onClick={e=>openOverlay('settings',e.currentTarget)}>{style}<Glyph name="down" size={12}/></button></div><button ref={sendButton} className="send-button" type="submit" disabled={generating} aria-label={generating?'正在生成图片':'生成图片'}><Glyph name="arrow" size={25}/></button></div>
+      <div className="mobile-composer-tools"><div className="mobile-tools-left"><button type="button" ref={attachButton} className="attach-button" aria-label="添加本地参考图" title="参考图会发送至生图服务处理" onClick={e=>selected&&!reference?openOverlay('upload',e.currentTarget):fileInput.current?.click()}><Glyph name="plus" size={26}/></button><button type="button" className="setting-chip" aria-label={`画面比例 ${ratio}`} onClick={e=>openOverlay('settings',e.currentTarget)}><span className="ratio-icon"/>{ratio}<span className="resolution-inline">{resolution}</span><Glyph name="down" size={12}/></button><button type="button" className="setting-chip style-chip" aria-label={`图片风格 ${style}`} onClick={e=>openOverlay('settings',e.currentTarget)}>{style}<Glyph name="down" size={12}/></button></div><div className="mobile-tools-right"><button ref={voiceButton} className={`voice-button${voiceStage==='recording'?' is-recording':''}`} type="button" disabled={voiceStage==='starting'||voiceStage==='transcribing'} aria-label={voiceStage==='recording'?'停止录音':voiceStage==='starting'?'正在打开麦克风':voiceStage==='transcribing'?'正在转文字':'语音输入'} aria-pressed={voiceStage==='recording'} onClick={requestVoice}><Glyph name={voiceStage==='recording'?'stop':'mic'} size={20}/></button><button ref={sendButton} className="send-button" type="submit" disabled={generating||!!voiceStage} aria-label={generating?'正在生成图片':voiceStage?'等待语音转录':'生成图片'}><Glyph name="arrow" size={25}/></button></div></div>
+      {voiceStage&&<div className="voice-status" role="status"><span>{voiceStage==='starting'?'正在打开麦克风':voiceStage==='recording'?'录音中 · 点击停止':'正在转成文字'}</span>{voiceStage==='recording'&&<small>语音将加密发送到本机转录</small>}</div>}
       {error&&<p id="mobile-error" className="mobile-error" role="alert">{error}</p>}
-     </form><p id="preview-note" className="preview-note">{cacheError||'聊天记录保存在本机浏览器'}　<button type="button" onClick={e=>{setPending(null);setAccessDraft('');setAccessError('');openOverlay('access',e.currentTarget);}}>管理访问码</button></p>
+     </form><p id="preview-note" className="preview-note">{cacheError||'聊天记录保存在本机浏览器'}　<button type="button" onClick={e=>{setPending(null);setPendingVoice(null);setAccessDraft('');setAccessError('');openOverlay('access',e.currentTarget);}}>管理访问码</button></p>
     </div>
    </div>
    {overlay&&<div className={`overlay-layer overlay-${overlay}${closing?' is-closing':''}`} onAnimationEnd={event=>{if(closing&&event.target===dialog.current)finishClose();}}>

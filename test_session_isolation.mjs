@@ -57,6 +57,7 @@ assert.equal(document.querySelector('textarea').value,'新会话保留输入','A
 await openChat('原会话正在生成');
 assert.equal(document.querySelector('textarea').value,'','Accepted submission clears its originating draft');
 assert.match(document.querySelector('.mobile-conversation').textContent,/正在生成图片/);
+assert(document.querySelector('.generation-loading'),'Pending images show a lightweight waiting indicator');
 await openChat('新会话保留输入');
 assert.equal(document.querySelector('textarea').value,'新会话保留输入','An unsent draft remains accessible after switching');
 await submit();

@@ -49,13 +49,23 @@ class Runner:
         temporary.write_text(json.dumps(self.seen), encoding='utf-8')
         os.replace(temporary, self.seen_path)
 
+    def next_endpoint(self):
+        return '/api/runner/next'
+
+    def result_endpoint(self, job_id):
+        return '/api/runner/result/' + job_id
+
+    def process_payload(self, payload):
+        job = validate_job(payload)
+        return perform_job(job, self.bridge_url, self.bridge_key, bridge_state_dir=self.bridge_state_dir)
+
     def flush_outbox(self):
         for path in self.state_dir.glob('*.pending'):
             job_id = path.stem
             if not re.fullmatch(r'[0-9a-f]{32}', job_id):
                 continue
             body = path.read_bytes()
-            request = urllib.request.Request(self.cloud_url + '/api/runner/result/' + job_id, data=body,
+            request = urllib.request.Request(self.cloud_url + self.result_endpoint(job_id), data=body,
                                              headers={'X-Yero-Runner': self.runner_key, 'Content-Type': 'application/octet-stream',
                                                       'User-Agent': 'Mozilla/5.0 (compatible; YeroImageTest/1.0)'}, method='POST')
             with self.cloud.open(request, timeout=90) as response:
@@ -71,7 +81,7 @@ class Runner:
             return True
         query = urllib.parse.urlencode({'last': self.last, 'force': '1' if force else '0'})
         seen = ','.join(list(self.seen)[-100:])
-        request = urllib.request.Request(self.cloud_url + '/api/runner/next?' + query,
+        request = urllib.request.Request(self.cloud_url + self.next_endpoint() + '?' + query,
                                          headers={'X-Yero-Runner': self.runner_key, 'X-Yero-Seen': seen,
                                                   'User-Agent': 'Mozilla/5.0 (compatible; YeroImageTest/1.0)'})
         with self.cloud.open(request, timeout=30) as response:
@@ -84,8 +94,7 @@ class Runner:
         if not re.fullmatch(r'[0-9a-f]{32}', job_id) or job_id in self.seen:
             raise ValueError('Invalid job identifier')
         try:
-            job = validate_job(json.loads(self.open(encrypted)))
-            result = perform_job(job, self.bridge_url, self.bridge_key, bridge_state_dir=self.bridge_state_dir)
+            result = self.process_payload(json.loads(self.open(encrypted)))
         except InputError as exc:
             result = {'status': 'failed', 'error': str(exc)}
         except Exception:

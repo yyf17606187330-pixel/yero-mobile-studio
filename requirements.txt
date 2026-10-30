@@ -1,2 +1,3 @@
 Pillow>=10,<13
 cryptography>=42,<47
+faster-whisper>=1.2.1,<2
