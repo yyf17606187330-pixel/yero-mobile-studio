@@ -304,7 +304,7 @@ export function MobileStudio(){
    if(run!==generation.current)return;updateCreation(item.id,{remoteId:submitted.id});
    const currentDraft=draftsRef.current[chatId];const clear:Partial<ChatDraft>={};if(currentDraft?.prompt===rawPrompt)clear.prompt='';if(currentDraft?.reference?.url===next.reference){clear.reference=null;clear.mask=null;clear.selected=null;}patchDraft(chatId,clear);
    let completed=false;
-   for(let attempt=0;attempt<320;attempt++){
+   for(let attempt=0;attempt<(next.resolution==='2K'||next.resolution==='4K'?300:200);attempt++){
     if(run!==generation.current)return;
     const job=await call('/api/jobs/'+submitted.id,{method:'GET',headers});
     if(job.status==='failed')throw new Error(typeof job.error==='string'?job.error:'生图失败，请重试。');
@@ -312,7 +312,7 @@ export function MobileStudio(){
      if(typeof job.image!=='string'||!/^data:image\/(?:png|webp);base64,[A-Za-z0-9+/=]+$/.test(job.image))throw new Error('返回的图片无效，请重试。');
      updateCreation(item.id,{status:'completed',image:job.image,hasImage:true});if(activeChatRef.current===chatId)bottom();completed=true;break;
     }
-    await new Promise(resolve=>window.setTimeout(resolve,3000));
+    await new Promise(resolve=>window.setTimeout(resolve,5000));
    }
    if(!completed&&run===generation.current)throw new Error('等待时间过长，请稍后重试。');
   }catch(cause){if(run===generation.current){const message=cause instanceof Error?cause.message:'生图服务暂时不可用，请稍后再试。';updateCreation(item.id,{status:'failed',error:message});patchDraft(chatId,{error:message});}}
@@ -323,7 +323,7 @@ export function MobileStudio(){
  const readReference=(file?:File)=>{
   if(!file)return;
   if(!['image/png','image/jpeg','image/webp'].includes(file.type)){setError('请选择 JPG、PNG 或 WebP 图片。');return;}
-  if(file.size>10*1024*1024){setError('参考图请小于 10 MB。');return;}
+  if(file.size>17*1024*1024){setError('参考图请不大于 17 MB。');return;}
   const token=++uploadToken.current;reader.current?.abort();const next=new FileReader();reader.current=next;
   next.onload=()=>{if(token!==uploadToken.current)return;setReference({name:file.name,url:String(next.result)});setError('');if(selected){setView('create');top();}if(overlay==='upload'){restoreFocus.current=attachButton.current;closeOverlay();}};
   next.onerror=()=>{if(token===uploadToken.current)setError('图片读取失败，请重新选择。');};next.readAsDataURL(file);
@@ -344,7 +344,7 @@ export function MobileStudio(){
   <span className="sheet-handle"/>
   <div className="sheet-heading"><h2 id="upload-title">先上传你的图片</h2><button data-initial-focus className="round-button" aria-label="关闭模板上传提示" onClick={closeOverlay}><Glyph name="close"/></button></div>
   <div className="upload-template-summary">{selectedTemplate&&<span className="upload-template-thumb"><TemplateArt template={selectedTemplate}/></span>}<div><p>使用「{selectedTemplate?.name}」需要一张图片。</p><span>上传后，可以继续描述。</span></div></div>
-  <p className="upload-formats">请选择 JPG、PNG 或 WebP 图片，不大于 10 MB。参考图会发送至生图服务处理，结果按生成图片的原始比例显示。</p>
+  <p className="upload-formats">请选择 JPG、PNG 或 WebP 图片，不大于 17 MB。参考图会发送至生图服务处理，结果按生成图片的原始比例显示。</p>
   {error&&<p className="mobile-error" role="alert">{error}</p>}
   <button className="sheet-done upload-primary" onClick={()=>fileInput.current?.click()} aria-label="选择模板图片"><Glyph name="plus" size={21}/>上传图片</button>
  </section>;
@@ -389,7 +389,7 @@ export function MobileStudio(){
      <div className="history-title"><h2 id="history-title">{historyFilter==='聊天'?'聊天记录':historyFilter==='收藏'?'我的收藏':'我的图片'}</h2><span>{historyFilter==='聊天'?`${conversations.length} 条`:`${visibleCreations.length} 张`}</span></div>
      {cacheLoading&&!conversations.length?<div className="history-empty" aria-live="polite"><p>正在读取本地记录…</p></div>:historyFilter==='聊天'?(visibleChats.length?<div className="chat-list">{visibleChats.map(chat=><button key={chat.id} className={`chat-open ${activeChatId===chat.id?'active':''}`} onClick={()=>openChat(chat.id)}><span>{chat.title}</span><small>{new Date(chat.updatedAt).toLocaleDateString('zh-CN',{month:'short',day:'numeric'})}</small></button>)}</div>:<div className="history-empty" aria-live="polite"><Glyph name="edit" size={30}/><h3>{search?'没有匹配的聊天':'还没有聊天记录'}</h3><p>{search?'可以清除搜索后再看看。':'开始创作后，聊天会保存在本机。'}</p>{search&&<button onClick={()=>setSearch('')}>清除搜索</button>}</div>):visibleCreations.length?<div className="history-list">{visibleCreations.map(item=><div className="history-item" key={item.id}><button className="history-open" onClick={()=>openChat(item.chatId)}>{item.image?<img src={item.image} alt=""/>:<span className="history-image-placeholder"><Glyph name="image" size={20}/></span>}<span>{item.brief.prompt}</span></button><button className="history-favorite" aria-label={item.favorite?'取消收藏':'收藏图片'} aria-pressed={item.favorite} onClick={()=>toggleFavorite(item)}><Glyph name="star" size={18}/></button></div>)}</div>:<div className="history-empty" aria-live="polite"><Glyph name="image" size={30}/><h3>{search?'没有匹配的图片':historyFilter==='收藏'?'还没有收藏':'还没有作品'}</h3><p>{search?'可以清除搜索后再看看。':historyFilter==='收藏'?'收藏后的图片会显示在这里。':'生成的图片会显示在这里。'}</p>{search&&<button onClick={()=>setSearch('')}>清除搜索</button>}</div>}
      <div className="drawer-bottom">{showAbout&&<p className="drawer-about">聊天和图片保存在当前设备的浏览器中，清除浏览器数据会删除记录。参考图、描述和结果也会在本机服务保留，任务在云端加密暂存约一小时。</p>}<button className="about-button" aria-expanded={showAbout} onClick={()=>setShowAbout(!showAbout)}>本地记录说明 <Glyph name="down" size={13}/></button><div className="drawer-bottom-tools"><button className="round-button" aria-label={theme==='light'?'切换深色主题':'切换浅色主题'} onClick={()=>setTheme(theme==='light'?'dark':'light')}><Glyph name={theme==='light'?'moon':'sun'}/></button><label className="history-search"><Glyph name="search" size={19}/><input aria-label="搜索聊天和图片" value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索记录"/>{search&&<button aria-label="清除搜索" onClick={()=>setSearch('')}><Glyph name="close" size={16}/></button>}</label><button className="drawer-compose" aria-label="从侧边栏新建聊天" onClick={startNew}><Glyph name="edit" size={22}/></button></div></div>
-    </aside>:overlay==='upload'?uploadPanel:overlay==='access'?accessPanel:<section ref={dialog} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title"><span className="sheet-handle"/><div className="sheet-heading"><h2 id="settings-title">画面设置</h2><button data-initial-focus className="round-button" aria-label="关闭画面设置" onClick={closeOverlay}><Glyph name="close"/></button></div><fieldset><legend>画面比例</legend><div className="ratio-grid">{ratios.map(r=><button key={r} aria-pressed={ratio===r} className={ratio===r?'active':''} onClick={()=>setRatio(r)}><span className={`ratio-drawing ratio-${r.replace(':','-')}`}/><span>{r}</span></button>)}</div></fieldset><fieldset><legend>分辨率</legend><div className="resolution-grid">{resolutions.map(value=><button key={value} aria-pressed={resolution===value} className={resolution===value?'active':''} onClick={()=>setResolution(value)}>{value}</button>)}</div><p className="resolution-note">按长边等比缩放，放大不会增加原生细节。</p></fieldset><fieldset><legend>风格方向</legend><div className="style-grid">{styles.map(s=><button key={s} aria-pressed={style===s} className={style===s?'active':''} onClick={()=>setStyle(s)}>{s}{style===s&&<Glyph name="check" size={15}/>}</button>)}</div></fieldset><button className="sheet-done" onClick={closeOverlay}>完成</button></section>}
+    </aside>:overlay==='upload'?uploadPanel:overlay==='access'?accessPanel:<section ref={dialog} className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title"><span className="sheet-handle"/><div className="sheet-heading"><h2 id="settings-title">画面设置</h2><button data-initial-focus className="round-button" aria-label="关闭画面设置" onClick={closeOverlay}><Glyph name="close"/></button></div><fieldset><legend>画面比例</legend><div className="ratio-grid">{ratios.map(r=><button key={r} aria-pressed={ratio===r} className={ratio===r?'active':''} onClick={()=>setRatio(r)}><span className={`ratio-drawing ratio-${r.replace(':','-')}`}/><span>{r}</span></button>)}</div></fieldset><fieldset><legend>分辨率</legend><div className="resolution-grid">{resolutions.map(value=><button key={value} aria-pressed={resolution===value} className={resolution===value?'active':''} onClick={()=>setResolution(value)}>{value}</button>)}<button disabled title="原生接口待配置">2K Ultra</button><button disabled title="原生接口待配置">4K Ultra</button></div><p className="resolution-note">2K / 4K 使用本机 Upscayl 超分；Ultra 原生接口待配置。</p></fieldset><fieldset><legend>风格方向</legend><div className="style-grid">{styles.map(s=><button key={s} aria-pressed={style===s} className={style===s?'active':''} onClick={()=>setStyle(s)}>{s}{style===s&&<Glyph name="check" size={15}/>}</button>)}</div></fieldset><button className="sheet-done" onClick={closeOverlay}>完成</button></section>}
    </div>}
   </div>
  </div>;

@@ -1,0 +1,13 @@
+name = "yero-wake-hub"
+main = "wake.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+preview_urls = false
+
+[[durable_objects.bindings]]
+name = "YERO_DISPATCH"
+class_name = "WakeHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WakeHub"]

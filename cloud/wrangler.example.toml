@@ -7,6 +7,16 @@ pages_build_output_dir = "../dist/site"
 binding = "YERO_QUEUE"
 id = "YOUR_KV_NAMESPACE_ID"
 
+[[durable_objects.bindings]]
+name = "YERO_DISPATCH"
+class_name = "WakeHub"
+script_name = "yero-wake-hub"
+
 [[env.production.kv_namespaces]]
 binding = "YERO_QUEUE"
 id = "YOUR_KV_NAMESPACE_ID"
+
+[[env.production.durable_objects.bindings]]
+name = "YERO_DISPATCH"
+class_name = "WakeHub"
+script_name = "yero-wake-hub"

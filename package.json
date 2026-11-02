@@ -6,7 +6,7 @@
   "engines": {"node": ">=22"},
   "scripts": {
     "build": "node build.mjs",
-    "test": "node check.mjs && node test_session_isolation.mjs && node test_voice_ui.mjs && node test_pixel_wave.mjs && node test_live_ui.mjs && node test_payment_service.mjs && node test_payment_ui.mjs && node test_chat_storage.mjs && node --test test_worker.mjs"
+    "test": "node check.mjs && node test_session_isolation.mjs && node test_voice_ui.mjs && node test_pixel_wave.mjs && node test_live_ui.mjs && node test_payment_service.mjs && node test_payment_ui.mjs && node test_chat_storage.mjs && node --test test_worker.mjs test_on_demand.mjs test_dispatch.mjs"
   },
   "dependencies": {
     "react": "19.3.1",

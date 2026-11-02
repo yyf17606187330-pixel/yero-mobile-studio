@@ -25,6 +25,8 @@ await act(()=>root.render(createElement(MobileStudio)));
 await click(button('创作'));
 await click(button('画面比例 1:1'));
 assert(button('2K'),'Resolution remains selectable');
+assert(button('2K Ultra')?.disabled,'Native 2K remains visible until an API is configured');
+assert(button('4K Ultra')?.disabled,'Native 4K remains visible until an API is configured');
 await click(button('2K'));
 await click(button('完成'));
 await setValue(document.querySelector('textarea'),'A purple paper airplane');

@@ -49,14 +49,13 @@ class FakeVoiceCloud(BaseHTTPRequestHandler):
         if self.headers.get('X-Yero-Runner') != 'runner-key':
             self.send_error(401)
             return
-        if urlsplit(self.path).path != '/api/runner/voice-next' or JOB_ID in self.headers.get('X-Yero-Seen', '').split(','):
-            self.send_response(204)
-            self.send_header('X-Yero-Latest', JOB_ID)
-            self.end_headers()
+        if not self.headers.get('User-Agent', '').startswith('Mozilla/'):
+            self.send_error(403)
+            return
+        if urlsplit(self.path).path != '/api/runner/job/' + JOB_ID or urlsplit(self.path).query != 'kind=voice':
+            self.send_error(404)
             return
         self.send_response(200)
-        self.send_header('X-Yero-Job', JOB_ID)
-        self.send_header('X-Yero-Latest', JOB_ID)
         self.send_header('Content-Length', str(len(self.queued)))
         self.end_headers()
         self.wfile.write(self.queued)
@@ -109,11 +108,11 @@ class VoiceIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             runner = self.voice.VoiceRunner('http://127.0.0.1:%d' % self.cloud.server_port, 'runner-key', KEY,
                                             Path(folder), transcriber=lambda raw: '紫色海报' if raw == wav() else '')
-            self.assertTrue(runner.run_once(force=True))
+            self.assertTrue(runner.run_job(JOB_ID))
             self.assertEqual(FakeVoiceCloud.result, {'status': 'completed', 'text': '紫色海报'})
-            self.assertFalse(runner.run_once(force=True))
+            self.assertFalse(runner.run_job(JOB_ID))
             self.assertEqual(FakeVoiceCloud.received_paths,
-                             ['/api/runner/voice-next', '/api/runner/voice-result/' + JOB_ID, '/api/runner/voice-next'])
+                             ['/api/runner/job/' + JOB_ID, '/api/runner/voice-result/' + JOB_ID])
 
 
 if __name__ == '__main__':

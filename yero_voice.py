@@ -11,7 +11,7 @@ import urllib.parse
 from pathlib import Path
 
 from yero_relay import InputError
-from yero_runner import Runner
+from yero_runner import Runner, lock_runner
 
 MAX_AUDIO_BYTES = 2 * 1024 * 1024
 SAMPLE_RATE = 16000
@@ -103,12 +103,10 @@ class SpeechTranscriber:
 
 
 class VoiceRunner(Runner):
+    kind = 'voice'
     def __init__(self, cloud_url, runner_key, storage_key, state_dir, transcriber=None):
         super().__init__(cloud_url, runner_key, storage_key, '', '', state_dir)
         self.transcriber = transcriber or SpeechTranscriber()
-
-    def next_endpoint(self):
-        return '/api/runner/voice-next'
 
     def result_endpoint(self, job_id):
         return '/api/runner/voice-result/' + job_id
@@ -133,19 +131,9 @@ def main():
         raise ValueError('Test credentials are missing or invalid')
     transcriber = SpeechTranscriber()
     runner = VoiceRunner(args.url, runner_key, storage_key, args.secret_dir / 'voice-state', transcriber)
-    next_scan = 0
+    lock = lock_runner(runner.state_dir)
     print('Yero voice transcription runner started.', flush=True)
-    while True:
-        force = time.monotonic() >= next_scan
-        if force:
-            next_scan = time.monotonic() + 20
-        try:
-            runner.run_once(force=force)
-            transcriber.unload_if_idle()
-            time.sleep(4)
-        except Exception:
-            print('Cloud voice connection unavailable; retrying.', flush=True)
-            time.sleep(10)
+    runner.watch(on_idle=transcriber.unload_if_idle)
 
 
 if __name__ == '__main__':

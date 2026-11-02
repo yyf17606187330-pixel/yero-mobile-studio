@@ -18,6 +18,8 @@
 !test_payment_service.mjs
 !test_payment_ui.mjs
 !test_worker.mjs
+!test_on_demand.mjs
+!test_dispatch.mjs
 !test_yero_relay.py
 !test_yero_runner.py
 !test_yero_voice.py
@@ -33,6 +35,8 @@
 !assets/yero-logo-original.png
 !cloud/
 !cloud/worker.mjs
+!cloud/wake.mjs
+!cloud/wake.wrangler.example.toml
 !cloud/wrangler.example.toml
 
 # Credentials and private local state must never be staged, even under allowed directories.
